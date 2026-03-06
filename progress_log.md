@@ -8,3 +8,4 @@ This file records daily development updates.
 ## Day 1
 Studied NOx pollution sources in underground subway tunnels.
 Reviewed environmental factors affecting tunnel air quality.
+Outlined possible dataset features for NOx prediction.

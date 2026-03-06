@@ -9,3 +9,4 @@ This file records daily development updates.
 Studied NOx pollution sources in underground subway tunnels.
 Reviewed environmental factors affecting tunnel air quality.
 Outlined possible dataset features for NOx prediction.
+Planned project folder structure for ML pipeline.

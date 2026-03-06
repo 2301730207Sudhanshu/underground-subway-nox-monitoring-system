@@ -1,2 +1,12 @@
-# underground-subway-nox-monitoring-system
-Real-time Nitrogen Oxides (NOx) emissions monitoring system for underground subway tunnels, designed to enhance air quality monitoring, safety analysis, and data-driven decision making using sensor data and software-based analytics
+# Underground Subway NOx Monitoring System
+
+## Problem
+Nitrogen Oxides (NOx) accumulation in underground subway tunnels can affect air quality and passenger health.
+
+## Goal
+Develop a machine learning system that monitors and predicts NOx levels in underground subway environments.
+
+## Applications
+- Smart ventilation systems
+- Real-time pollution monitoring
+- Urban transport safety

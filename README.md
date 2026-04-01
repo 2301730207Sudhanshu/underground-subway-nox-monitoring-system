@@ -1,12 +1,38 @@
-# Underground Subway NOx Monitoring System
+# 🚇 Physics-Informed NOx Prediction System for Subway Tunnels
 
-## Problem
-Nitrogen Oxides (NOx) accumulation in underground subway tunnels can affect air quality and passenger health.
+## 📌 Project Overview
+This project presents a **Physics-Informed Machine Learning (PIML) framework** for predicting **Nitrogen Oxides (NOx)** concentration in **underground subway tunnel environments** (focused on Indian metro systems like Delhi Metro).
 
-## Goal
-Develop a machine learning system that monitors and predicts NOx levels in underground subway environments.
+It combines:
+- 🌍 Real-world air quality data (OpenAQ)
+- ⚙️ Physics-based modeling (mass balance, airflow)
+- 🤖 Machine Learning prediction models
+- 🌐 Full-stack web application for real-time monitoring
 
-## Applications
-- Smart ventilation systems
-- Real-time pollution monitoring
-- Urban transport safety
+---
+
+## 🎯 Objectives
+- Predict NOx concentration in subway tunnels with high accuracy
+- Integrate **physics-based constraints** into ML models
+- Provide **real-time monitoring dashboard**
+- Improve **interpretability using SHAP/LIME**
+- Support **environmental and health risk analysis**
+
+---
+
+## 🧠 Core Concept
+
+The system is based on the **mass balance principle**:
+
+C = E / V
+
+Where:
+- **C** → NOx concentration  
+- **E** → Emission rate  
+- **V** → Ventilation rate  
+
+This physics equation is integrated with ML to improve prediction reliability.
+
+---
+
+## 🏗️ System Architecture

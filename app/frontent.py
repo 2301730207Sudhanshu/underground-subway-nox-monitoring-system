@@ -6,11 +6,12 @@ import sqlite3
 from datetime import datetime
 import time
 import logging
+import os
 
-# ---------------- CONFIG CLASS ----------------
+# ---------------- CONFIG ----------------
 class Config:
-    SAFE = 40
-    MODERATE = 80
+    SAFE = float(os.getenv("SAFE_THRESHOLD", 40))
+    MODERATE = float(os.getenv("MODERATE_THRESHOLD", 80))
     ANOMALY_Z = 2.0
     DRIFT_THRESHOLD = 20
 
@@ -33,7 +34,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown('<p class="big-font">⚡ NOx AI Control Center (v7 - Hybrid AI)</p>', unsafe_allow_html=True)
+st.markdown('<p class="big-font">⚡ NOx AI Control Center (v8 - Ultimate)</p>', unsafe_allow_html=True)
 
 # ---------------- LOAD MODEL ----------------
 @st.cache_resource
@@ -49,8 +50,8 @@ def init_db():
     conn.execute("""
     CREATE TABLE IF NOT EXISTS readings(
         time TEXT PRIMARY KEY,
-        ml_prediction REAL,
-        physics_prediction REAL,
+        ml REAL,
+        physics REAL,
         residual REAL,
         status TEXT
     )
@@ -76,20 +77,27 @@ def generate_sensor_data():
     }
 
 # ---------------- PHYSICS MODEL ----------------
-def physics_model(sensor):
-    # Simple proxy equation (you can justify in research)
+def physics_model(s):
     return (
-        0.5 * sensor["no"] +
-        0.3 * sensor["no2"] -
-        0.2 * sensor["wind_speed"] +
-        0.1 * sensor["temperature"]
+        0.5*s["no"] +
+        0.3*s["no2"] -
+        0.2*s["wind_speed"] +
+        0.1*s["temperature"]
     )
 
-# ---------------- CLASSIFICATION ----------------
-def classify(val):
-    if val < Config.SAFE:
+# ---------------- ADAPTIVE THRESHOLD ----------------
+def adaptive_thresholds(series):
+    if len(series) < 20:
+        return Config.SAFE, Config.MODERATE
+    mean = series.mean()
+    std = series.std()
+    return mean - std, mean + std
+
+# ---------------- CLASSIFY ----------------
+def classify(val, safe, moderate):
+    if val < safe:
         return "SAFE", "status-safe"
-    elif val < Config.MODERATE:
+    elif val < moderate:
         return "MODERATE", "status-mod"
     else:
         return "UNSAFE", "status-unsafe"
@@ -105,6 +113,11 @@ def detect_drift(series):
     if len(series) < 20:
         return False
     return abs(series.iloc[-1] - series.mean()) > Config.DRIFT_THRESHOLD
+
+def stability_score(series):
+    if len(series) < 5:
+        return 0.5
+    return max(0, min(1, 1 / (1 + series.std())))
 
 # ---------------- DB ----------------
 def save_reading(ml, phy, residual, status):
@@ -135,9 +148,12 @@ if time.time() - st.session_state.last_run > refresh_rate:
 
     ml_pred = float(model.predict(df_input)[0])
     phy_pred = physics_model(sensor)
-
     residual = abs(ml_pred - phy_pred)
-    status, css = classify(ml_pred)
+
+    hist_temp = load_history()
+    safe_t, mod_t = adaptive_thresholds(hist_temp["ml"] if not hist_temp.empty else pd.Series())
+
+    status, css = classify(ml_pred, safe_t, mod_t)
 
     save_reading(ml_pred, phy_pred, residual, status)
 
@@ -146,22 +162,22 @@ hist = load_history()
 
 # ---------------- ANALYTICS ----------------
 if not hist.empty:
-    anomaly = detect_anomaly(hist["ml_prediction"])
-    drift = detect_drift(hist["ml_prediction"])
+    hist["smooth"] = hist["ml"].rolling(5).mean()
+    anomaly = detect_anomaly(hist["ml"])
+    drift = detect_drift(hist["ml"])
+    stability = stability_score(hist["ml"])
 else:
     anomaly = drift = False
+    stability = 0
 
 # ================= DASHBOARD =================
 col1, col2 = st.columns([2, 1])
 
 # ---------------- LEFT ----------------
 with col1:
-    st.subheader("📈 ML vs Physics NOx")
-
+    st.subheader("📈 Hybrid NOx (ML vs Physics)")
     if not hist.empty:
-        st.line_chart(
-            hist.set_index("time")[["ml_prediction", "physics_prediction"]]
-        )
+        st.line_chart(hist.set_index("time")[["ml", "physics", "smooth"]])
 
     st.subheader("📉 Residual Error")
     if not hist.empty:
@@ -174,11 +190,12 @@ with col2:
     if not hist.empty:
         latest = hist.iloc[-1]
 
-        st.metric("ML NOx", f"{latest['ml_prediction']:.2f}")
-        st.metric("Physics NOx", f"{latest['physics_prediction']:.2f}")
+        st.metric("ML", f"{latest['ml']:.2f}")
+        st.metric("Physics", f"{latest['physics']:.2f}")
         st.metric("Residual", f"{latest['residual']:.2f}")
+        st.metric("Stability", f"{stability:.2f}")
 
-        st.markdown(f"<h2 class='{classify(latest['ml_prediction'])[1]}'>{latest['status']}</h2>", unsafe_allow_html=True)
+        st.markdown(f"<h2 class='{classify(latest['ml'], Config.SAFE, Config.MODERATE)[1]}'>{latest['status']}</h2>", unsafe_allow_html=True)
 
         if anomaly:
             st.error("🚨 Anomaly")

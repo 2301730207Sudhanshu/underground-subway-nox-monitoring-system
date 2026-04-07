@@ -176,3 +176,129 @@ v11 transforms the system into a:
 - **Reliable real-time monitoring system**
 - **Deployment-ready architecture**
 
+# 🔄 v12 Update – Changes Only
+
+## ⚙ User Control System (NEW)
+- Added sidebar control panel
+- Toggle between:
+  - Auto sensor mode
+  - Manual input mode
+- Enables testing under custom conditions
+
+---
+
+## 🧪 Manual Sensor Input
+- User can directly input:
+  - NO, NO2
+  - Temperature, Humidity
+  - Wind speed & direction
+- Useful for:
+  - Testing scenarios
+  - Research validation
+  - Demonstrations
+
+---
+
+## 📥 Data Export Feature
+- Added CSV export functionality
+- Users can download historical data
+- Enables:
+  - Offline analysis
+  - Research usage
+  - Model retraining
+
+---
+
+## 🗑 Database Management
+- Added "Clear Database" option
+- Allows reset of system state
+- Useful during testing/demo
+
+---
+
+## 📊 KPI Dashboard (NEW)
+- Added key performance indicators:
+  - Average NOx
+  - Maximum NOx
+  - Minimum NOx
+- Provides quick system insights
+
+---
+
+## 📈 Enhanced Data Access
+- Added direct download button in UI
+- Faster and more user-friendly export
+
+---
+
+## 🎯 Summary
+v12 upgrades the system into a:
+
+- **Interactive AI dashboard**
+- **User-controllable simulation system**
+- **Research data collection tool**
+- **Demo-ready product**
+# 🔄 v12 Update – Changes Only
+
+## ⚙ User Control System (NEW)
+- Added sidebar control panel
+- Toggle between:
+  - Auto sensor mode
+  - Manual input mode
+- Enables testing under custom conditions
+
+---
+
+## 🧪 Manual Sensor Input
+- User can directly input:
+  - NO, NO2
+  - Temperature, Humidity
+  - Wind speed & direction
+- Useful for:
+  - Testing scenarios
+  - Research validation
+  - Demonstrations
+
+---
+
+## 📥 Data Export Feature
+- Added CSV export functionality
+- Users can download historical data
+- Enables:
+  - Offline analysis
+  - Research usage
+  - Model retraining
+
+---
+
+## 🗑 Database Management
+- Added "Clear Database" option
+- Allows reset of system state
+- Useful during testing/demo
+
+---
+
+## 📊 KPI Dashboard (NEW)
+- Added key performance indicators:
+  - Average NOx
+  - Maximum NOx
+  - Minimum NOx
+- Provides quick system insights
+
+---
+
+## 📈 Enhanced Data Access
+- Added direct download button in UI
+- Faster and more user-friendly export
+
+---
+
+## 🎯 Summary
+v12 upgrades the system into a:
+
+- **Interactive AI dashboard**
+- **User-controllable simulation system**
+- **Research data collection tool**
+- **Demo-ready product**
+
+This version significantly improves usability, testing capability, and real-world applicability.

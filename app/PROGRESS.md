@@ -40,3 +40,12 @@
 - Improved anomaly and drift detection
 - Environment-based configuration support
 - Fully production-ready AI monitoring system
+
+🚀 NOx AI Control Center v9 (Enterprise AI Platform)
+
+- Implemented hybrid ML + Physics system
+- Added adaptive thresholds and health scoring
+- Integrated anomaly and drift detection
+- Improved DB reliability with retry logic
+- Designed layered architecture for scalability
+- Fully production-ready AI monitoring platform

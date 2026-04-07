@@ -7,10 +7,21 @@ from datetime import datetime
 import time
 import logging
 
-# ---------------- LOGGING ----------------
-logging.basicConfig(level=logging.INFO)
-
 # ---------------- CONFIG ----------------
+CONFIG = {
+    "SAFE": 40,
+    "MODERATE": 80,
+    "ANOMALY_THRESHOLD": 2.0
+}
+
+# ---------------- LOGGING ----------------
+logging.basicConfig(
+    filename="app.log",
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s"
+)
+
+# ---------------- UI ----------------
 st.set_page_config(page_title="NOx AI Control Center", layout="wide")
 
 st.markdown("""
@@ -22,19 +33,12 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown('<p class="big-font">⚡ AI NOx Control Center</p>', unsafe_allow_html=True)
+st.markdown('<p class="big-font">⚡ AI NOx Control Center (v5)</p>', unsafe_allow_html=True)
 
 # ---------------- LOAD MODEL ----------------
 @st.cache_resource
 def load_model():
-    try:
-        model = pickle.load(open("nox_rf_model.pkl", "rb"))
-        logging.info("Model loaded successfully")
-        return model
-    except Exception as e:
-        logging.error("Model loading failed")
-        st.error("❌ Model loading failed")
-        st.stop()
+    return pickle.load(open("nox_rf_model.pkl", "rb"))
 
 model = load_model()
 
@@ -46,16 +50,9 @@ def init_db():
 
     c.execute("""
     CREATE TABLE IF NOT EXISTS readings(
-        time TEXT,
+        time TEXT PRIMARY KEY,
         prediction REAL,
         status TEXT
-    )
-    """)
-
-    c.execute("""
-    CREATE TABLE IF NOT EXISTS alerts(
-        time TEXT,
-        level TEXT
     )
     """)
 
@@ -80,127 +77,113 @@ def generate_sensor_data():
         "month": now.month
     }
 
-# ---------------- VALIDATION ----------------
-def validate_input(data):
-    for key, val in data.items():
-        if val is None or np.isnan(val):
-            return False
-    return True
-
-# ---------------- CLASSIFY ----------------
+# ---------------- CLASSIFICATION ----------------
 def classify(val):
-    if val < 40:
+    if val < CONFIG["SAFE"]:
         return "SAFE", "status-safe"
-    elif val < 80:
+    elif val < CONFIG["MODERATE"]:
         return "MODERATE", "status-mod"
     else:
         return "UNSAFE", "status-unsafe"
 
-# ---------------- DB OPS ----------------
+# ---------------- ANOMALY DETECTION ----------------
+def detect_anomaly(series):
+    if len(series) < 10:
+        return False
+    mean = series.mean()
+    std = series.std()
+    latest = series.iloc[-1]
+    z_score = (latest - mean) / std if std != 0 else 0
+    return abs(z_score) > CONFIG["ANOMALY_THRESHOLD"]
+
+# ---------------- TREND ----------------
+def get_trend(series):
+    if len(series) < 5:
+        return "→ Stable"
+    if series.iloc[-1] > series.iloc[-5]:
+        return "📈 Rising"
+    elif series.iloc[-1] < series.iloc[-5]:
+        return "📉 Falling"
+    return "→ Stable"
+
+# ---------------- SAVE ----------------
 def save_reading(prediction, status):
-    cursor = conn.cursor()
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    try:
+        conn.execute(
+            "INSERT INTO readings VALUES (?, ?, ?)",
+            (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), prediction, status)
+        )
+        conn.commit()
+    except:
+        pass
 
-    cursor.execute("INSERT INTO readings VALUES (?, ?, ?)", (now, prediction, status))
-
-    if status == "UNSAFE":
-        cursor.execute("INSERT INTO alerts VALUES (?, ?)", (now, status))
-
-    conn.commit()
-
+# ---------------- LOAD ----------------
 def load_history():
     df = pd.read_sql("SELECT * FROM readings ORDER BY time DESC LIMIT 300", conn)
     return df[::-1]
 
-def load_alerts():
-    return pd.read_sql("SELECT * FROM alerts ORDER BY time DESC LIMIT 50", conn)
-
 # ---------------- SIDEBAR ----------------
 st.sidebar.header("⚙ Control Panel")
-
-refresh_rate = st.sidebar.slider("Refresh Rate (sec)", 1, 10, 3)
-simulate = st.sidebar.toggle("Simulate Sensor", True)
-
-# ---------------- SESSION CONTROL ----------------
-if "last_run" not in st.session_state:
-    st.session_state.last_run = 0
-
-current_time = time.time()
-
-run_prediction = False
-if current_time - st.session_state.last_run > refresh_rate:
-    run_prediction = True
-    st.session_state.last_run = current_time
+refresh_rate = st.sidebar.slider("Refresh Rate", 1, 10, 3)
 
 # ---------------- MAIN ----------------
-if run_prediction:
+sensor = generate_sensor_data()
+df_input = pd.DataFrame([sensor])
 
-    sensor = generate_sensor_data() if simulate else {}
+prediction = float(model.predict(df_input)[0])
+status, css = classify(prediction)
 
-    if validate_input(sensor):
-        df_input = pd.DataFrame([sensor])
+save_reading(prediction, status)
 
-        try:
-            prediction = float(model.predict(df_input)[0])
-        except:
-            prediction = 0.0
-            logging.warning("Prediction failed")
-
-        status, css = classify(prediction)
-
-        save_reading(prediction, status)
-
-# Load data
 hist = load_history()
-alerts = load_alerts()
 
-# Add smoothing (rolling mean)
+# Analytics
 if not hist.empty:
-    hist["smoothed"] = hist["prediction"].rolling(window=5).mean()
+    hist["rolling"] = hist["prediction"].rolling(5).mean()
+    anomaly = detect_anomaly(hist["prediction"])
+    trend = get_trend(hist["prediction"])
+else:
+    anomaly = False
+    trend = "N/A"
 
 # ================= DASHBOARD =================
 col1, col2 = st.columns([2, 1])
 
 # ---------------- LEFT ----------------
 with col1:
-    st.subheader("📈 NOx Trend (Raw vs Smoothed)")
+    st.subheader("📈 NOx Trend")
 
     if not hist.empty:
-        st.line_chart(hist.set_index("time")[["prediction", "smoothed"]])
-    else:
-        st.info("No data available")
+        st.line_chart(hist.set_index("time")[["prediction", "rolling"]])
+
+    # Feature Importance
+    if hasattr(model, "feature_importances_"):
+        importance = pd.DataFrame({
+            "Feature": df_input.columns,
+            "Importance": model.feature_importances_
+        }).sort_values(by="Importance", ascending=False)
+
+        st.subheader("🧠 Feature Importance")
+        st.bar_chart(importance.set_index("Feature"))
 
 # ---------------- RIGHT ----------------
 with col2:
-    st.subheader("🤖 AI Decision Engine")
+    st.subheader("🤖 AI Decision")
 
+    st.metric("NOx", f"{prediction:.2f}")
+    st.markdown(f"<h2 class='{css}'>{status}</h2>", unsafe_allow_html=True)
+
+    st.metric("Trend", trend)
+
+    if anomaly:
+        st.error("🚨 Anomaly Detected!")
+
+    st.subheader("📊 Stats")
     if not hist.empty:
-        latest = hist.iloc[-1]
-
-        st.metric("NOx", f"{latest['prediction']:.2f}")
-        st.markdown(f"<h2 class='{classify(latest['prediction'])[1]}'>{latest['status']}</h2>", unsafe_allow_html=True)
-
-        if latest["status"] == "UNSAFE":
-            st.error("🚨 CRITICAL ALERT")
-        elif latest["status"] == "MODERATE":
-            st.warning("⚠ MODERATE")
-        else:
-            st.success("✅ SAFE")
-
-        st.subheader("📊 Insights")
-
         st.metric("Avg", f"{hist['prediction'].mean():.2f}")
-        st.metric("Peak", f"{hist['prediction'].max():.2f}")
-        st.metric("Alerts", len(alerts))
-
-# ---------------- ALERT PANEL ----------------
-st.subheader("🚨 Alert History")
-
-if not alerts.empty:
-    st.dataframe(alerts, use_container_width=True)
-else:
-    st.info("No alerts triggered")
+        st.metric("Max", f"{hist['prediction'].max():.2f}")
+        st.metric("Records", len(hist))
 
 # ---------------- AUTO REFRESH ----------------
-time.sleep(1)
+time.sleep(refresh_rate)
 st.rerun()

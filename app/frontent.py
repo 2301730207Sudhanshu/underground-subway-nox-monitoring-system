@@ -25,7 +25,7 @@ st.markdown('<p class="big-font">⚡ AI NOx Control Center</p>', unsafe_allow_ht
 def load_model():
     try:
         return pickle.load(open("nox_rf_model.pkl", "rb"))
-    except Exception as e:
+    except:
         st.error("❌ Model loading failed")
         st.stop()
 
@@ -48,10 +48,9 @@ def init_db():
 
 conn = init_db()
 
-# ---------------- SENSOR ENGINE ----------------
+# ---------------- SENSOR ----------------
 def generate_sensor_data():
     now = datetime.now()
-
     return {
         "no": np.random.uniform(10, 200),
         "no2": np.random.uniform(10, 200),
@@ -65,7 +64,7 @@ def generate_sensor_data():
         "month": now.month
     }
 
-# ---------------- CLASSIFICATION ----------------
+# ---------------- CLASSIFY ----------------
 def classify(val):
     if val < 40:
         return "SAFE", "status-safe"
@@ -74,7 +73,7 @@ def classify(val):
     else:
         return "UNSAFE", "status-unsafe"
 
-# ---------------- SAVE DATA ----------------
+# ---------------- DB FUNCTIONS ----------------
 def save_reading(prediction, status):
     cursor = conn.cursor()
     cursor.execute(
@@ -83,44 +82,51 @@ def save_reading(prediction, status):
     )
     conn.commit()
 
-# ---------------- LOAD HISTORY ----------------
 def load_history():
-    try:
-        df = pd.read_sql(
-            "SELECT * FROM readings ORDER BY time DESC LIMIT 100",
-            conn
-        )
-        return df[::-1]  # reverse for proper timeline
-    except:
-        return pd.DataFrame(columns=["time", "prediction", "status"])
+    df = pd.read_sql("SELECT * FROM readings ORDER BY time DESC LIMIT 200", conn)
+    return df[::-1]
+
+def clear_db():
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM readings")
+    conn.commit()
 
 # ---------------- SIDEBAR ----------------
 st.sidebar.header("⚙ Control Panel")
+
 refresh_rate = st.sidebar.slider("Refresh Rate (sec)", 1, 10, 3)
-simulate = st.sidebar.toggle("Simulate Sensor Data", True)
+simulate = st.sidebar.toggle("Simulate Sensor", True)
 
-# ---------------- MAIN LOGIC ----------------
-if simulate:
-    sensor = generate_sensor_data()
-else:
-    sensor = {k: 0 for k in [
-        "no", "no2", "relativehumidity", "temperature",
-        "wind_direction", "wind_speed",
-        "hour", "day", "weekday", "month"
-    ]}
+if st.sidebar.button("🗑 Clear Database"):
+    clear_db()
+    st.sidebar.success("Database Cleared!")
 
-df_input = pd.DataFrame([sensor])
+# ---------------- SESSION CONTROL ----------------
+if "last_run" not in st.session_state:
+    st.session_state.last_run = None
 
-# Prediction
-try:
-    prediction = float(model.predict(df_input)[0])
-except:
-    prediction = 0.0
+current_time = time.time()
 
-status, css = classify(prediction)
+run_prediction = False
+if st.session_state.last_run is None or current_time - st.session_state.last_run > refresh_rate:
+    run_prediction = True
+    st.session_state.last_run = current_time
 
-# Save
-save_reading(prediction, status)
+# ---------------- MAIN ----------------
+if run_prediction:
+
+    sensor = generate_sensor_data() if simulate else {}
+
+    df_input = pd.DataFrame([sensor])
+
+    try:
+        prediction = float(model.predict(df_input)[0])
+    except:
+        prediction = 0.0
+
+    status, css = classify(prediction)
+
+    save_reading(prediction, status)
 
 # Load history
 hist = load_history()
@@ -132,41 +138,47 @@ col1, col2 = st.columns([2, 1])
 with col1:
     st.subheader("🎮 Sensor Control Panel")
 
-    sensor_df = pd.DataFrame(sensor.items(), columns=["Sensor", "Value"])
-    st.dataframe(sensor_df, use_container_width=True)
+    if run_prediction:
+        sensor_df = pd.DataFrame(sensor.items(), columns=["Sensor", "Value"])
+        st.dataframe(sensor_df, use_container_width=True)
 
     st.subheader("📈 Live NOx Trend")
 
     if not hist.empty:
         st.line_chart(hist.set_index("time")["prediction"])
     else:
-        st.info("No data yet...")
+        st.info("No data available")
+
+    # 🔥 Download button
+    st.download_button(
+        "📥 Download Data (CSV)",
+        hist.to_csv(index=False),
+        file_name="nox_data.csv"
+    )
 
 # ---------------- RIGHT ----------------
 with col2:
     st.subheader("🤖 AI Decision Engine")
 
-    st.metric("Predicted NOx", f"{prediction:.2f}")
-    st.markdown(f"<h2 class='{css}'>{status}</h2>", unsafe_allow_html=True)
-
-    if status == "UNSAFE":
-        st.error("🚨 CRITICAL POLLUTION ALERT")
-    elif status == "MODERATE":
-        st.warning("⚠ MODERATE POLLUTION")
-    else:
-        st.success("✅ Air Quality Safe")
-
-    st.subheader("📊 System Stats")
-
     if not hist.empty:
-        avg = hist["prediction"].mean()
-        max_val = hist["prediction"].max()
+        latest = hist.iloc[-1]
 
-        st.metric("Average NOx", f"{avg:.2f}")
-        st.metric("Peak NOx", f"{max_val:.2f}")
-    else:
-        st.write("No stats available")
+        st.metric("Predicted NOx", f"{latest['prediction']:.2f}")
+        st.markdown(f"<h2 class='{classify(latest['prediction'])[1]}'>{latest['status']}</h2>", unsafe_allow_html=True)
+
+        if latest["status"] == "UNSAFE":
+            st.error("🚨 CRITICAL ALERT")
+        elif latest["status"] == "MODERATE":
+            st.warning("⚠ MODERATE LEVEL")
+        else:
+            st.success("✅ SAFE LEVEL")
+
+        st.subheader("📊 System Stats")
+
+        st.metric("Average NOx", f"{hist['prediction'].mean():.2f}")
+        st.metric("Peak NOx", f"{hist['prediction'].max():.2f}")
+        st.metric("Total Records", len(hist))
 
 # ---------------- AUTO REFRESH ----------------
-time.sleep(refresh_rate)
+time.sleep(1)
 st.rerun()

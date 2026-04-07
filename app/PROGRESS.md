@@ -23,3 +23,11 @@
 - Added session-controlled execution
 - Enhanced analytics and monitoring features
 - Upgraded to production-grade AI system
+
+- 🔥 NOx AI Control Center v7 (Hybrid Physics-Informed AI)
+
+- Integrated physics-based NOx estimation
+- Added hybrid ML vs Physics comparison
+- Implemented residual error tracking
+- Improved anomaly & drift detection
+- Upgraded to research-grade AI monitoring system

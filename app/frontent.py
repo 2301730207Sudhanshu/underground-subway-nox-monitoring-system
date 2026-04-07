@@ -14,36 +14,33 @@ class Config:
     MODERATE = float(os.getenv("MODERATE_THRESHOLD", 80))
     ANOMALY_Z = 2.0
     DRIFT_THRESHOLD = 20
+    ALERT_COOLDOWN = 10  # seconds
 
 # ================= LOGGING =================
-logging.basicConfig(
-    filename="app.log",
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s"
-)
+logging.basicConfig(filename="app.log", level=logging.INFO)
 
 # ================= UI =================
-st.set_page_config(page_title="NOx AI Control Center", layout="wide")
+st.set_page_config(page_title="NOx AI Control Center v10", layout="wide")
 
 st.markdown("""
 <style>
-.big-font {font-size:40px !important; font-weight:700;}
-.status-safe {color: #00ff9c; font-weight:bold;}
-.status-mod {color: orange; font-weight:bold;}
-.status-unsafe {color: red; font-weight:bold;}
+.big {font-size:40px; font-weight:700;}
+.safe {color:#00ff9c;}
+.mod {color:orange;}
+.unsafe {color:red;}
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown('<p class="big-font">⚡ NOx AI Control Center (v9 - Enterprise AI)</p>', unsafe_allow_html=True)
+st.markdown('<p class="big">⚡ NOx AI Control Center v10 (Realtime System)</p>', unsafe_allow_html=True)
 
-# ================= LOAD MODEL =================
+# ================= MODEL =================
 @st.cache_resource
 def load_model():
     return pickle.load(open("nox_rf_model.pkl", "rb"))
 
 model = load_model()
 
-# ================= DATABASE SERVICE =================
+# ================= DB =================
 @st.cache_resource
 def init_db():
     conn = sqlite3.connect("nox_data.db", check_same_thread=False)
@@ -53,40 +50,35 @@ def init_db():
         ml REAL,
         physics REAL,
         residual REAL,
-        status TEXT
+        status TEXT,
+        alert TEXT
     )
     """)
     return conn
 
 conn = init_db()
 
-def save_reading(ml, phy, residual, status, retries=3):
-    for _ in range(retries):
-        try:
-            conn.execute(
-                "INSERT INTO readings VALUES (?, ?, ?, ?, ?)",
-                (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), ml, phy, residual, status)
-            )
-            conn.commit()
-            return
-        except:
-            time.sleep(0.1)
-    logging.warning("DB write failed after retries")
+def save(row):
+    try:
+        conn.execute("INSERT INTO readings VALUES (?, ?, ?, ?, ?, ?)", row)
+        conn.commit()
+    except:
+        pass
 
-def load_history():
+def load():
     df = pd.read_sql("SELECT * FROM readings ORDER BY time DESC LIMIT 300", conn)
     return df[::-1]
 
-# ================= SENSOR SERVICE =================
-def generate_sensor_data():
+# ================= SENSOR =================
+def sensor():
     now = datetime.now()
     return {
-        "no": np.random.uniform(10, 200),
-        "no2": np.random.uniform(10, 200),
-        "relativehumidity": np.random.uniform(30, 90),
-        "temperature": np.random.uniform(20, 50),
-        "wind_direction": np.random.uniform(0, 360),
-        "wind_speed": np.random.uniform(0, 10),
+        "no": np.random.uniform(10,200),
+        "no2": np.random.uniform(10,200),
+        "relativehumidity": np.random.uniform(30,90),
+        "temperature": np.random.uniform(20,50),
+        "wind_direction": np.random.uniform(0,360),
+        "wind_speed": np.random.uniform(0,10),
         "hour": now.hour,
         "day": now.day,
         "weekday": now.weekday(),
@@ -94,104 +86,97 @@ def generate_sensor_data():
     }
 
 # ================= MODELS =================
-def physics_model(s):
-    return (
-        0.5*s["no"] +
-        0.3*s["no2"] -
-        0.2*s["wind_speed"] +
-        0.1*s["temperature"]
-    )
+def physics(s):
+    return 0.5*s["no"] + 0.3*s["no2"] - 0.2*s["wind_speed"] + 0.1*s["temperature"]
 
-def classify(val, safe, moderate):
-    if val < safe:
-        return "SAFE", "status-safe"
-    elif val < moderate:
-        return "MODERATE", "status-mod"
-    return "UNSAFE", "status-unsafe"
+def classify(v):
+    if v < Config.SAFE:
+        return "SAFE","safe"
+    elif v < Config.MODERATE:
+        return "MOD","mod"
+    return "UNSAFE","unsafe"
 
 # ================= ANALYTICS =================
-def adaptive_thresholds(series):
-    if len(series) < 20:
-        return Config.SAFE, Config.MODERATE
-    return series.mean() - series.std(), series.mean() + series.std()
+def ema(series, alpha=0.3):
+    return series.ewm(alpha=alpha).mean()
 
-def detect_anomaly(series):
-    if len(series) < 10:
-        return False
-    z = (series.iloc[-1] - series.mean()) / (series.std() or 1)
-    return abs(z) > Config.ANOMALY_Z
+def anomaly(series):
+    if len(series)<10: return False
+    z=(series.iloc[-1]-series.mean())/(series.std() or 1)
+    return abs(z)>Config.ANOMALY_Z
 
-def detect_drift(series):
-    if len(series) < 20:
-        return False
-    return abs(series.iloc[-1] - series.mean()) > Config.DRIFT_THRESHOLD
+def drift(series):
+    if len(series)<20: return False
+    return abs(series.iloc[-1]-series.mean())>Config.DRIFT_THRESHOLD
 
-def stability_score(series):
-    if len(series) < 5:
-        return 0.5
-    return max(0, min(1, 1 / (1 + series.std())))
+def confidence(ml, phy):
+    diff = abs(ml - phy)
+    return max(0, 100 - diff)
 
-def health_score(anomaly, drift, stability):
-    score = stability * 100
-    if anomaly:
-        score -= 30
-    if drift:
-        score -= 20
+def health(anom, drift_flag, conf):
+    score = conf
+    if anom: score -= 30
+    if drift_flag: score -= 20
     return max(0, min(100, score))
 
-# ================= SESSION CONTROL =================
-if "last_run" not in st.session_state:
-    st.session_state.last_run = 0
+# ================= ALERT ENGINE =================
+if "last_alert" not in st.session_state:
+    st.session_state.last_alert = 0
 
-refresh_rate = st.sidebar.slider("Refresh Rate", 1, 10, 3)
+def alert_engine(status):
+    now = time.time()
+    if now - st.session_state.last_alert < Config.ALERT_COOLDOWN:
+        return "COOLDOWN"
 
-if time.time() - st.session_state.last_run > refresh_rate:
-    st.session_state.last_run = time.time()
+    if status == "UNSAFE":
+        st.session_state.last_alert = now
+        return "CRITICAL"
+    elif status == "MOD":
+        return "WARNING"
+    return "NORMAL"
 
-    sensor = generate_sensor_data()
-    df_input = pd.DataFrame([sensor])
+# ================= LOOP =================
+refresh = st.sidebar.slider("Refresh",1,10,2)
 
-    ml_pred = float(model.predict(df_input)[0])
-    phy_pred = physics_model(sensor)
-    residual = abs(ml_pred - phy_pred)
+s = sensor()
+df = pd.DataFrame([s])
 
-    hist_temp = load_history()
-    safe_t, mod_t = adaptive_thresholds(hist_temp["ml"] if not hist_temp.empty else pd.Series())
+ml = float(model.predict(df)[0])
+phy = physics(s)
+res = abs(ml-phy)
 
-    status, css = classify(ml_pred, safe_t, mod_t)
+status, css = classify(ml)
+alert = alert_engine(status)
 
-    save_reading(ml_pred, phy_pred, residual, status)
+save((datetime.now().strftime("%Y-%m-%d %H:%M:%S"), ml, phy, res, status, alert))
 
-# ================= LOAD DATA =================
-hist = load_history()
+# ================= LOAD =================
+hist = load()
 
-# ================= ANALYTICS =================
 if not hist.empty:
-    hist["smooth"] = hist["ml"].rolling(5).mean()
-
-    anomaly = detect_anomaly(hist["ml"])
-    drift = detect_drift(hist["ml"])
-    stability = stability_score(hist["ml"])
-    health = health_score(anomaly, drift, stability)
+    hist["ema"] = ema(hist["ml"])
+    anom = anomaly(hist["ml"])
+    drift_flag = drift(hist["ml"])
+    conf = confidence(hist.iloc[-1]["ml"], hist.iloc[-1]["physics"])
+    health_score = health(anom, drift_flag, conf)
 else:
-    anomaly = drift = False
-    stability = 0
-    health = 0
+    anom=drift_flag=False
+    conf=health_score=0
 
 # ================= DASHBOARD =================
-col1, col2 = st.columns([2, 1])
+col1,col2 = st.columns([2,1])
 
 with col1:
-    st.subheader("📈 Hybrid NOx Monitoring")
+    st.subheader("📈 Real-time Stream")
     if not hist.empty:
-        st.line_chart(hist.set_index("time")[["ml", "physics", "smooth"]])
+        st.line_chart(hist.set_index("time")[["ml","physics","ema"]])
 
-    st.subheader("📉 Residual Error")
+    st.subheader("📉 Residual")
     if not hist.empty:
         st.line_chart(hist.set_index("time")["residual"])
 
 with col2:
-    st.subheader("🤖 AI Decision Engine")
+    st.subheader("🤖 AI Engine")
 
     if not hist.empty:
         latest = hist.iloc[-1]
@@ -199,15 +184,21 @@ with col2:
         st.metric("ML", f"{latest['ml']:.2f}")
         st.metric("Physics", f"{latest['physics']:.2f}")
         st.metric("Residual", f"{latest['residual']:.2f}")
-        st.metric("Health Score", f"{health:.1f}/100")
+        st.metric("Confidence", f"{conf:.1f}%")
+        st.metric("Health", f"{health_score:.1f}/100")
 
-        st.markdown(f"<h2 class='{classify(latest['ml'], Config.SAFE, Config.MODERATE)[1]}'>{latest['status']}</h2>", unsafe_allow_html=True)
+        st.markdown(f"<h2 class='{css}'>{latest['status']}</h2>", unsafe_allow_html=True)
 
-        if anomaly:
-            st.error("🚨 Anomaly Detected")
-        if drift:
-            st.warning("⚠ Drift Detected")
+        if latest["alert"] == "CRITICAL":
+            st.error("🚨 CRITICAL ALERT")
+        elif latest["alert"] == "WARNING":
+            st.warning("⚠ WARNING")
+
+        if anom:
+            st.error("🚨 Anomaly")
+        if drift_flag:
+            st.warning("⚠ Drift")
 
 # ================= AUTO REFRESH =================
-time.sleep(1)
+time.sleep(refresh)
 st.rerun()

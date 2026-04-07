@@ -14,13 +14,13 @@ class Config:
     MODERATE = float(os.getenv("MODERATE_THRESHOLD", 80))
     ANOMALY_Z = 2.0
     DRIFT_THRESHOLD = 20
-    ALERT_COOLDOWN = 10  # seconds
+    ALERT_COOLDOWN = 10
 
 # ================= LOGGING =================
 logging.basicConfig(filename="app.log", level=logging.INFO)
 
 # ================= UI =================
-st.set_page_config(page_title="NOx AI Control Center v10", layout="wide")
+st.set_page_config(page_title="NOx AI Control Center v11", layout="wide")
 
 st.markdown("""
 <style>
@@ -31,16 +31,16 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown('<p class="big">⚡ NOx AI Control Center v10 (Realtime System)</p>', unsafe_allow_html=True)
+st.markdown('<p class="big">⚡ NOx AI Control Center v11 (Final System)</p>', unsafe_allow_html=True)
 
-# ================= MODEL =================
+# ================= LOAD MODEL =================
 @st.cache_resource
 def load_model():
     return pickle.load(open("nox_rf_model.pkl", "rb"))
 
 model = load_model()
 
-# ================= DB =================
+# ================= DATABASE =================
 @st.cache_resource
 def init_db():
     conn = sqlite3.connect("nox_data.db", check_same_thread=False)
@@ -85,10 +85,34 @@ def sensor():
         "month": now.month
     }
 
-# ================= MODELS =================
+# ================= PHYSICS MODEL =================
 def physics(s):
     return 0.5*s["no"] + 0.3*s["no2"] - 0.2*s["wind_speed"] + 0.1*s["temperature"]
 
+# ================= PREDICTION SERVICE =================
+class PredictionService:
+
+    @staticmethod
+    def validate(sensor):
+        for v in sensor.values():
+            if isinstance(v, (int,float)):
+                if np.isnan(v) or np.isinf(v):
+                    return False
+        return True
+
+    @staticmethod
+    def predict(sensor):
+        if not PredictionService.validate(sensor):
+            return None
+
+        df = pd.DataFrame([sensor])
+        ml = float(model.predict(df)[0])
+        phy = physics(sensor)
+        residual = abs(ml - phy)
+
+        return ml, phy, residual
+
+# ================= CLASSIFICATION =================
 def classify(v):
     if v < Config.SAFE:
         return "SAFE","safe"
@@ -110,8 +134,7 @@ def drift(series):
     return abs(series.iloc[-1]-series.mean())>Config.DRIFT_THRESHOLD
 
 def confidence(ml, phy):
-    diff = abs(ml - phy)
-    return max(0, 100 - diff)
+    return max(0, 100 - abs(ml-phy))
 
 def health(anom, drift_flag, conf):
     score = conf
@@ -119,64 +142,81 @@ def health(anom, drift_flag, conf):
     if drift_flag: score -= 20
     return max(0, min(100, score))
 
-# ================= ALERT ENGINE =================
+# ================= ALERT SYSTEM =================
 if "last_alert" not in st.session_state:
     st.session_state.last_alert = 0
 
-def alert_engine(status):
-    now = time.time()
-    if now - st.session_state.last_alert < Config.ALERT_COOLDOWN:
-        return "COOLDOWN"
+def alert_score(residual, anomaly_flag, drift_flag):
+    score = residual
+    if anomaly_flag: score += 30
+    if drift_flag: score += 20
+    return score
 
-    if status == "UNSAFE":
-        st.session_state.last_alert = now
-        return "CRITICAL"
-    elif status == "MOD":
-        return "WARNING"
+def alert_label(score):
+    if score > 80: return "CRITICAL"
+    elif score > 40: return "WARNING"
     return "NORMAL"
 
-# ================= LOOP =================
+# ================= EXPLAINABILITY =================
+def feature_importance(sensor):
+    return {
+        "NO": sensor["no"] * 0.5,
+        "NO2": sensor["no2"] * 0.3,
+        "Wind": -sensor["wind_speed"] * 0.2,
+        "Temp": sensor["temperature"] * 0.1
+    }
+
+# ================= MAIN LOOP =================
 refresh = st.sidebar.slider("Refresh",1,10,2)
 
 s = sensor()
-df = pd.DataFrame([s])
 
-ml = float(model.predict(df)[0])
-phy = physics(s)
-res = abs(ml-phy)
+result = PredictionService.predict(s)
+
+if result:
+    ml, phy, res = result
+else:
+    st.error("Invalid sensor data")
+    st.stop()
 
 status, css = classify(ml)
-alert = alert_engine(status)
+
+hist = load()
+
+anom = anomaly(hist["ml"]) if not hist.empty else False
+drift_flag = drift(hist["ml"]) if not hist.empty else False
+
+score = alert_score(res, anom, drift_flag)
+alert = alert_label(score)
 
 save((datetime.now().strftime("%Y-%m-%d %H:%M:%S"), ml, phy, res, status, alert))
 
-# ================= LOAD =================
 hist = load()
 
 if not hist.empty:
     hist["ema"] = ema(hist["ml"])
-    anom = anomaly(hist["ml"])
-    drift_flag = drift(hist["ml"])
     conf = confidence(hist.iloc[-1]["ml"], hist.iloc[-1]["physics"])
     health_score = health(anom, drift_flag, conf)
 else:
-    anom=drift_flag=False
-    conf=health_score=0
+    conf = health_score = 0
 
 # ================= DASHBOARD =================
 col1,col2 = st.columns([2,1])
 
 with col1:
-    st.subheader("📈 Real-time Stream")
+    st.subheader("📈 Real-time NOx Monitoring")
     if not hist.empty:
         st.line_chart(hist.set_index("time")[["ml","physics","ema"]])
 
-    st.subheader("📉 Residual")
+    st.subheader("📉 Residual Error")
     if not hist.empty:
         st.line_chart(hist.set_index("time")["residual"])
 
+    st.subheader("🧠 Feature Contribution")
+    st.bar_chart(pd.Series(feature_importance(s)))
+
 with col2:
-    st.subheader("🤖 AI Engine")
+    st.subheader("🤖 AI Decision Engine")
 
     if not hist.empty:
         latest = hist.iloc[-1]
@@ -195,9 +235,9 @@ with col2:
             st.warning("⚠ WARNING")
 
         if anom:
-            st.error("🚨 Anomaly")
+            st.error("🚨 Anomaly Detected")
         if drift_flag:
-            st.warning("⚠ Drift")
+            st.warning("⚠ Drift Detected")
 
 # ================= AUTO REFRESH =================
 time.sleep(refresh)

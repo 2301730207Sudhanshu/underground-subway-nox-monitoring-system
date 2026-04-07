@@ -11,7 +11,8 @@ import logging
 CONFIG = {
     "SAFE": 40,
     "MODERATE": 80,
-    "ANOMALY_THRESHOLD": 2.0
+    "ANOMALY_Z": 2.0,
+    "DRIFT_THRESHOLD": 20
 }
 
 # ---------------- LOGGING ----------------
@@ -33,7 +34,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown('<p class="big-font">⚡ AI NOx Control Center (v5)</p>', unsafe_allow_html=True)
+st.markdown('<p class="big-font">⚡ NOx AI Control Center (v6)</p>', unsafe_allow_html=True)
 
 # ---------------- LOAD MODEL ----------------
 @st.cache_resource
@@ -46,17 +47,13 @@ model = load_model()
 @st.cache_resource
 def init_db():
     conn = sqlite3.connect("nox_data.db", check_same_thread=False)
-    c = conn.cursor()
-
-    c.execute("""
+    conn.execute("""
     CREATE TABLE IF NOT EXISTS readings(
         time TEXT PRIMARY KEY,
         prediction REAL,
         status TEXT
     )
     """)
-
-    conn.commit()
     return conn
 
 conn = init_db()
@@ -77,7 +74,7 @@ def generate_sensor_data():
         "month": now.month
     }
 
-# ---------------- CLASSIFICATION ----------------
+# ---------------- CLASSIFY ----------------
 def classify(val):
     if val < CONFIG["SAFE"]:
         return "SAFE", "status-safe"
@@ -86,27 +83,30 @@ def classify(val):
     else:
         return "UNSAFE", "status-unsafe"
 
-# ---------------- ANOMALY DETECTION ----------------
+# ---------------- ANALYTICS ----------------
 def detect_anomaly(series):
     if len(series) < 10:
         return False
-    mean = series.mean()
-    std = series.std()
-    latest = series.iloc[-1]
-    z_score = (latest - mean) / std if std != 0 else 0
-    return abs(z_score) > CONFIG["ANOMALY_THRESHOLD"]
+    z = (series.iloc[-1] - series.mean()) / (series.std() or 1)
+    return abs(z) > CONFIG["ANOMALY_Z"]
 
-# ---------------- TREND ----------------
+def detect_drift(series):
+    if len(series) < 20:
+        return False
+    return abs(series.iloc[-1] - series.mean()) > CONFIG["DRIFT_THRESHOLD"]
+
+def get_confidence(series):
+    if len(series) < 5:
+        return 0.5
+    std = series.std()
+    return max(0, min(1, 1 / (1 + std)))
+
 def get_trend(series):
     if len(series) < 5:
         return "→ Stable"
-    if series.iloc[-1] > series.iloc[-5]:
-        return "📈 Rising"
-    elif series.iloc[-1] < series.iloc[-5]:
-        return "📉 Falling"
-    return "→ Stable"
+    return "📈 Rising" if series.iloc[-1] > series.iloc[-5] else "📉 Falling"
 
-# ---------------- SAVE ----------------
+# ---------------- DB ----------------
 def save_reading(prediction, status):
     try:
         conn.execute(
@@ -115,35 +115,43 @@ def save_reading(prediction, status):
         )
         conn.commit()
     except:
-        pass
+        logging.warning("Duplicate timestamp skipped")
 
-# ---------------- LOAD ----------------
 def load_history():
     df = pd.read_sql("SELECT * FROM readings ORDER BY time DESC LIMIT 300", conn)
     return df[::-1]
 
-# ---------------- SIDEBAR ----------------
-st.sidebar.header("⚙ Control Panel")
+# ---------------- SESSION CONTROL ----------------
+if "last_run" not in st.session_state:
+    st.session_state.last_run = 0
+
 refresh_rate = st.sidebar.slider("Refresh Rate", 1, 10, 3)
 
-# ---------------- MAIN ----------------
-sensor = generate_sensor_data()
-df_input = pd.DataFrame([sensor])
+if time.time() - st.session_state.last_run > refresh_rate:
+    st.session_state.last_run = time.time()
 
-prediction = float(model.predict(df_input)[0])
-status, css = classify(prediction)
+    sensor = generate_sensor_data()
+    df_input = pd.DataFrame([sensor])
 
-save_reading(prediction, status)
+    prediction = float(model.predict(df_input)[0])
+    status, css = classify(prediction)
 
+    save_reading(prediction, status)
+
+# ---------------- LOAD DATA ----------------
 hist = load_history()
 
-# Analytics
+# ---------------- ANALYTICS ----------------
 if not hist.empty:
     hist["rolling"] = hist["prediction"].rolling(5).mean()
+
     anomaly = detect_anomaly(hist["prediction"])
+    drift = detect_drift(hist["prediction"])
+    confidence = get_confidence(hist["prediction"])
     trend = get_trend(hist["prediction"])
 else:
-    anomaly = False
+    anomaly = drift = False
+    confidence = 0
     trend = "N/A"
 
 # ================= DASHBOARD =================
@@ -152,11 +160,9 @@ col1, col2 = st.columns([2, 1])
 # ---------------- LEFT ----------------
 with col1:
     st.subheader("📈 NOx Trend")
-
     if not hist.empty:
         st.line_chart(hist.set_index("time")[["prediction", "rolling"]])
 
-    # Feature Importance
     if hasattr(model, "feature_importances_"):
         importance = pd.DataFrame({
             "Feature": df_input.columns,
@@ -170,20 +176,25 @@ with col1:
 with col2:
     st.subheader("🤖 AI Decision")
 
-    st.metric("NOx", f"{prediction:.2f}")
-    st.markdown(f"<h2 class='{css}'>{status}</h2>", unsafe_allow_html=True)
-
-    st.metric("Trend", trend)
-
-    if anomaly:
-        st.error("🚨 Anomaly Detected!")
-
-    st.subheader("📊 Stats")
     if not hist.empty:
+        latest = hist.iloc[-1]
+
+        st.metric("NOx", f"{latest['prediction']:.2f}")
+        st.markdown(f"<h2 class='{classify(latest['prediction'])[1]}'>{latest['status']}</h2>", unsafe_allow_html=True)
+
+        st.metric("Trend", trend)
+        st.metric("Confidence", f"{confidence:.2f}")
+
+        if anomaly:
+            st.error("🚨 Anomaly Detected")
+        if drift:
+            st.warning("⚠ Model Drift Detected")
+
+        st.subheader("📊 Stats")
         st.metric("Avg", f"{hist['prediction'].mean():.2f}")
         st.metric("Max", f"{hist['prediction'].max():.2f}")
         st.metric("Records", len(hist))
 
 # ---------------- AUTO REFRESH ----------------
-time.sleep(refresh_rate)
+time.sleep(1)
 st.rerun()

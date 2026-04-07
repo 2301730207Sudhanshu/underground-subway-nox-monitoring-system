@@ -49,3 +49,49 @@
 - Improved DB reliability with retry logic
 - Designed layered architecture for scalability
 - Fully production-ready AI monitoring platform
+
+- # ⚡ NOx AI Control Center (v10 - Real-Time Intelligent Monitoring System)
+
+## 🚀 Overview
+The **NOx AI Control Center** is a real-time, hybrid AI-based monitoring system designed for predicting and analyzing Nitrogen Oxides (NOx) levels in underground subway environments.
+
+It combines:
+- 🤖 Machine Learning (Random Forest Model)
+- ⚙ Physics-Based Modeling
+- 📡 Real-Time Streaming Simulation
+- 🚨 Intelligent Alert System
+
+This system ensures **high reliability, explainability, and robustness** in dynamic environmental conditions.
+
+---
+
+## 🧠 Key Features
+
+### 🔥 AI + Physics Hybrid System
+- ML model predicts NOx levels
+- Physics model validates predictions
+- Residual error ensures trustworthiness
+
+### ⚡ Real-Time Streaming
+- Continuous sensor simulation
+- Sliding window processing
+- EMA smoothing for stable trends
+
+### 🚨 Smart Alerting
+- Multi-level alerts (Normal, Warning, Critical)
+- Cooldown mechanism to prevent alert spam
+
+### 📊 Advanced Analytics
+- Anomaly detection (Z-score based)
+- Drift detection (distribution shift)
+- Confidence score (ML vs Physics agreement)
+- Health score (system reliability)
+
+### 💾 Persistent Storage
+- SQLite database for historical tracking
+- Stores predictions, residuals, alerts
+
+---
+
+## 🏗️ System Architecture
+

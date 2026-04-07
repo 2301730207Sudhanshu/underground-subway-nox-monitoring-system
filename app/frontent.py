@@ -20,7 +20,7 @@ class Config:
 logging.basicConfig(filename="app.log", level=logging.INFO)
 
 # ================= UI =================
-st.set_page_config(page_title="NOx AI Control Center v11", layout="wide")
+st.set_page_config(page_title="NOx AI Control Center v12", layout="wide")
 
 st.markdown("""
 <style>
@@ -31,9 +31,9 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown('<p class="big">⚡ NOx AI Control Center v11 (Final System)</p>', unsafe_allow_html=True)
+st.markdown('<p class="big">⚡ NOx AI Control Center v12 (Final System)</p>', unsafe_allow_html=True)
 
-# ================= LOAD MODEL =================
+# ================= MODEL =================
 @st.cache_resource
 def load_model():
     return pickle.load(open("nox_rf_model.pkl", "rb"))
@@ -69,6 +69,14 @@ def load():
     df = pd.read_sql("SELECT * FROM readings ORDER BY time DESC LIMIT 300", conn)
     return df[::-1]
 
+# ================= SIDEBAR CONTROLS =================
+st.sidebar.subheader("⚙ System Controls")
+
+manual_mode = st.sidebar.toggle("Manual Input Mode", False)
+export_btn = st.sidebar.button("📥 Export CSV")
+clear_db = st.sidebar.button("🗑 Clear Database")
+refresh = st.sidebar.slider("Refresh",1,10,2)
+
 # ================= SENSOR =================
 def sensor():
     now = datetime.now()
@@ -85,7 +93,23 @@ def sensor():
         "month": now.month
     }
 
-# ================= PHYSICS MODEL =================
+def manual_sensor():
+    return {
+        "no": st.sidebar.slider("NO", 0.0, 300.0, 50.0),
+        "no2": st.sidebar.slider("NO2", 0.0, 300.0, 40.0),
+        "relativehumidity": st.sidebar.slider("Humidity", 0.0, 100.0, 50.0),
+        "temperature": st.sidebar.slider("Temperature", 0.0, 60.0, 30.0),
+        "wind_direction": st.sidebar.slider("Wind Dir", 0.0, 360.0, 180.0),
+        "wind_speed": st.sidebar.slider("Wind Speed", 0.0, 20.0, 5.0),
+        "hour": datetime.now().hour,
+        "day": datetime.now().day,
+        "weekday": datetime.now().weekday(),
+        "month": datetime.now().month
+    }
+
+s = manual_sensor() if manual_mode else sensor()
+
+# ================= PHYSICS =================
 def physics(s):
     return 0.5*s["no"] + 0.3*s["no2"] - 0.2*s["wind_speed"] + 0.1*s["temperature"]
 
@@ -104,13 +128,11 @@ class PredictionService:
     def predict(sensor):
         if not PredictionService.validate(sensor):
             return None
-
         df = pd.DataFrame([sensor])
         ml = float(model.predict(df)[0])
         phy = physics(sensor)
-        residual = abs(ml - phy)
-
-        return ml, phy, residual
+        res = abs(ml - phy)
+        return ml, phy, res
 
 # ================= CLASSIFICATION =================
 def classify(v):
@@ -121,8 +143,8 @@ def classify(v):
     return "UNSAFE","unsafe"
 
 # ================= ANALYTICS =================
-def ema(series, alpha=0.3):
-    return series.ewm(alpha=alpha).mean()
+def ema(series):
+    return series.ewm(alpha=0.3).mean()
 
 def anomaly(series):
     if len(series)<10: return False
@@ -142,10 +164,7 @@ def health(anom, drift_flag, conf):
     if drift_flag: score -= 20
     return max(0, min(100, score))
 
-# ================= ALERT SYSTEM =================
-if "last_alert" not in st.session_state:
-    st.session_state.last_alert = 0
-
+# ================= ALERT =================
 def alert_score(residual, anomaly_flag, drift_flag):
     score = residual
     if anomaly_flag: score += 30
@@ -166,11 +185,7 @@ def feature_importance(sensor):
         "Temp": sensor["temperature"] * 0.1
     }
 
-# ================= MAIN LOOP =================
-refresh = st.sidebar.slider("Refresh",1,10,2)
-
-s = sensor()
-
+# ================= MAIN =================
 result = PredictionService.predict(s)
 
 if result:
@@ -200,23 +215,38 @@ if not hist.empty:
 else:
     conf = health_score = 0
 
+# ================= EXPORT =================
+if export_btn:
+    df = load()
+    df.to_csv("nox_export.csv", index=False)
+    st.success("Data exported")
+
+if clear_db:
+    conn.execute("DELETE FROM readings")
+    conn.commit()
+    st.warning("Database cleared")
+
 # ================= DASHBOARD =================
 col1,col2 = st.columns([2,1])
 
 with col1:
-    st.subheader("📈 Real-time NOx Monitoring")
+    st.subheader("📈 Real-time Monitoring")
     if not hist.empty:
         st.line_chart(hist.set_index("time")[["ml","physics","ema"]])
 
-    st.subheader("📉 Residual Error")
+    st.subheader("📉 Residual")
     if not hist.empty:
         st.line_chart(hist.set_index("time")["residual"])
 
     st.subheader("🧠 Feature Contribution")
     st.bar_chart(pd.Series(feature_importance(s)))
 
+    if not hist.empty:
+        csv = hist.to_csv(index=False).encode('utf-8')
+        st.download_button("⬇ Download Data", csv, "nox_data.csv", "text/csv")
+
 with col2:
-    st.subheader("🤖 AI Decision Engine")
+    st.subheader("🤖 AI Engine")
 
     if not hist.empty:
         latest = hist.iloc[-1]
@@ -235,9 +265,15 @@ with col2:
             st.warning("⚠ WARNING")
 
         if anom:
-            st.error("🚨 Anomaly Detected")
+            st.error("🚨 Anomaly")
         if drift_flag:
-            st.warning("⚠ Drift Detected")
+            st.warning("⚠ Drift")
+
+    st.subheader("📊 KPI")
+    if not hist.empty:
+        st.metric("Avg", f"{hist['ml'].mean():.2f}")
+        st.metric("Max", f"{hist['ml'].max():.2f}")
+        st.metric("Min", f"{hist['ml'].min():.2f}")
 
 # ================= AUTO REFRESH =================
 time.sleep(refresh)

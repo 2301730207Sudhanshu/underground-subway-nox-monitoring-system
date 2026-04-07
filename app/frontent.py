@@ -8,21 +8,21 @@ import time
 import logging
 import os
 
-# ---------------- CONFIG ----------------
+# ================= CONFIG =================
 class Config:
     SAFE = float(os.getenv("SAFE_THRESHOLD", 40))
     MODERATE = float(os.getenv("MODERATE_THRESHOLD", 80))
     ANOMALY_Z = 2.0
     DRIFT_THRESHOLD = 20
 
-# ---------------- LOGGING ----------------
+# ================= LOGGING =================
 logging.basicConfig(
     filename="app.log",
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s"
 )
 
-# ---------------- UI ----------------
+# ================= UI =================
 st.set_page_config(page_title="NOx AI Control Center", layout="wide")
 
 st.markdown("""
@@ -34,16 +34,16 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown('<p class="big-font">⚡ NOx AI Control Center (v8 - Ultimate)</p>', unsafe_allow_html=True)
+st.markdown('<p class="big-font">⚡ NOx AI Control Center (v9 - Enterprise AI)</p>', unsafe_allow_html=True)
 
-# ---------------- LOAD MODEL ----------------
+# ================= LOAD MODEL =================
 @st.cache_resource
 def load_model():
     return pickle.load(open("nox_rf_model.pkl", "rb"))
 
 model = load_model()
 
-# ---------------- DATABASE ----------------
+# ================= DATABASE SERVICE =================
 @st.cache_resource
 def init_db():
     conn = sqlite3.connect("nox_data.db", check_same_thread=False)
@@ -60,7 +60,24 @@ def init_db():
 
 conn = init_db()
 
-# ---------------- SENSOR ----------------
+def save_reading(ml, phy, residual, status, retries=3):
+    for _ in range(retries):
+        try:
+            conn.execute(
+                "INSERT INTO readings VALUES (?, ?, ?, ?, ?)",
+                (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), ml, phy, residual, status)
+            )
+            conn.commit()
+            return
+        except:
+            time.sleep(0.1)
+    logging.warning("DB write failed after retries")
+
+def load_history():
+    df = pd.read_sql("SELECT * FROM readings ORDER BY time DESC LIMIT 300", conn)
+    return df[::-1]
+
+# ================= SENSOR SERVICE =================
 def generate_sensor_data():
     now = datetime.now()
     return {
@@ -76,7 +93,7 @@ def generate_sensor_data():
         "month": now.month
     }
 
-# ---------------- PHYSICS MODEL ----------------
+# ================= MODELS =================
 def physics_model(s):
     return (
         0.5*s["no"] +
@@ -85,24 +102,19 @@ def physics_model(s):
         0.1*s["temperature"]
     )
 
-# ---------------- ADAPTIVE THRESHOLD ----------------
-def adaptive_thresholds(series):
-    if len(series) < 20:
-        return Config.SAFE, Config.MODERATE
-    mean = series.mean()
-    std = series.std()
-    return mean - std, mean + std
-
-# ---------------- CLASSIFY ----------------
 def classify(val, safe, moderate):
     if val < safe:
         return "SAFE", "status-safe"
     elif val < moderate:
         return "MODERATE", "status-mod"
-    else:
-        return "UNSAFE", "status-unsafe"
+    return "UNSAFE", "status-unsafe"
 
-# ---------------- ANALYTICS ----------------
+# ================= ANALYTICS =================
+def adaptive_thresholds(series):
+    if len(series) < 20:
+        return Config.SAFE, Config.MODERATE
+    return series.mean() - series.std(), series.mean() + series.std()
+
 def detect_anomaly(series):
     if len(series) < 10:
         return False
@@ -119,22 +131,15 @@ def stability_score(series):
         return 0.5
     return max(0, min(1, 1 / (1 + series.std())))
 
-# ---------------- DB ----------------
-def save_reading(ml, phy, residual, status):
-    try:
-        conn.execute(
-            "INSERT INTO readings VALUES (?, ?, ?, ?, ?)",
-            (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), ml, phy, residual, status)
-        )
-        conn.commit()
-    except:
-        logging.warning("DB write skipped")
+def health_score(anomaly, drift, stability):
+    score = stability * 100
+    if anomaly:
+        score -= 30
+    if drift:
+        score -= 20
+    return max(0, min(100, score))
 
-def load_history():
-    df = pd.read_sql("SELECT * FROM readings ORDER BY time DESC LIMIT 300", conn)
-    return df[::-1]
-
-# ---------------- SESSION ----------------
+# ================= SESSION CONTROL =================
 if "last_run" not in st.session_state:
     st.session_state.last_run = 0
 
@@ -157,25 +162,27 @@ if time.time() - st.session_state.last_run > refresh_rate:
 
     save_reading(ml_pred, phy_pred, residual, status)
 
-# ---------------- LOAD ----------------
+# ================= LOAD DATA =================
 hist = load_history()
 
-# ---------------- ANALYTICS ----------------
+# ================= ANALYTICS =================
 if not hist.empty:
     hist["smooth"] = hist["ml"].rolling(5).mean()
+
     anomaly = detect_anomaly(hist["ml"])
     drift = detect_drift(hist["ml"])
     stability = stability_score(hist["ml"])
+    health = health_score(anomaly, drift, stability)
 else:
     anomaly = drift = False
     stability = 0
+    health = 0
 
 # ================= DASHBOARD =================
 col1, col2 = st.columns([2, 1])
 
-# ---------------- LEFT ----------------
 with col1:
-    st.subheader("📈 Hybrid NOx (ML vs Physics)")
+    st.subheader("📈 Hybrid NOx Monitoring")
     if not hist.empty:
         st.line_chart(hist.set_index("time")[["ml", "physics", "smooth"]])
 
@@ -183,9 +190,8 @@ with col1:
     if not hist.empty:
         st.line_chart(hist.set_index("time")["residual"])
 
-# ---------------- RIGHT ----------------
 with col2:
-    st.subheader("🤖 AI Decision")
+    st.subheader("🤖 AI Decision Engine")
 
     if not hist.empty:
         latest = hist.iloc[-1]
@@ -193,15 +199,15 @@ with col2:
         st.metric("ML", f"{latest['ml']:.2f}")
         st.metric("Physics", f"{latest['physics']:.2f}")
         st.metric("Residual", f"{latest['residual']:.2f}")
-        st.metric("Stability", f"{stability:.2f}")
+        st.metric("Health Score", f"{health:.1f}/100")
 
         st.markdown(f"<h2 class='{classify(latest['ml'], Config.SAFE, Config.MODERATE)[1]}'>{latest['status']}</h2>", unsafe_allow_html=True)
 
         if anomaly:
-            st.error("🚨 Anomaly")
+            st.error("🚨 Anomaly Detected")
         if drift:
-            st.warning("⚠ Drift")
+            st.warning("⚠ Drift Detected")
 
-# ---------------- AUTO REFRESH ----------------
+# ================= AUTO REFRESH =================
 time.sleep(1)
 st.rerun()

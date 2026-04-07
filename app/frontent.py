@@ -23,7 +23,11 @@ st.markdown('<p class="big-font">⚡ AI NOx Control Center</p>', unsafe_allow_ht
 # ---------------- LOAD MODEL ----------------
 @st.cache_resource
 def load_model():
-    return pickle.load(open("nox_rf_model.pkl", "rb"))
+    try:
+        return pickle.load(open("nox_rf_model.pkl", "rb"))
+    except Exception as e:
+        st.error("❌ Model loading failed")
+        st.stop()
 
 model = load_model()
 
@@ -70,31 +74,61 @@ def classify(val):
     else:
         return "UNSAFE", "status-unsafe"
 
-# ---------------- AUTO REFRESH ----------------
-refresh_rate = st.sidebar.slider("Refresh Rate (seconds)", 1, 10, 3)
+# ---------------- SAVE DATA ----------------
+def save_reading(prediction, status):
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT INTO readings VALUES (?, ?, ?)",
+        (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), prediction, status)
+    )
+    conn.commit()
 
-# ---------------- MAIN APP ----------------
-sensor = generate_sensor_data()
+# ---------------- LOAD HISTORY ----------------
+def load_history():
+    try:
+        df = pd.read_sql(
+            "SELECT * FROM readings ORDER BY time DESC LIMIT 100",
+            conn
+        )
+        return df[::-1]  # reverse for proper timeline
+    except:
+        return pd.DataFrame(columns=["time", "prediction", "status"])
+
+# ---------------- SIDEBAR ----------------
+st.sidebar.header("⚙ Control Panel")
+refresh_rate = st.sidebar.slider("Refresh Rate (sec)", 1, 10, 3)
+simulate = st.sidebar.toggle("Simulate Sensor Data", True)
+
+# ---------------- MAIN LOGIC ----------------
+if simulate:
+    sensor = generate_sensor_data()
+else:
+    sensor = {k: 0 for k in [
+        "no", "no2", "relativehumidity", "temperature",
+        "wind_direction", "wind_speed",
+        "hour", "day", "weekday", "month"
+    ]}
+
 df_input = pd.DataFrame([sensor])
 
-prediction = model.predict(df_input)[0]
+# Prediction
+try:
+    prediction = float(model.predict(df_input)[0])
+except:
+    prediction = 0.0
+
 status, css = classify(prediction)
 
-# Save to DB
-cursor = conn.cursor()
-cursor.execute(
-    "INSERT INTO readings VALUES (?, ?, ?)",
-    (datetime.now(), prediction, status)
-)
-conn.commit()
+# Save
+save_reading(prediction, status)
 
 # Load history
-hist = pd.read_sql("SELECT * FROM readings ORDER BY time DESC LIMIT 100", conn)
+hist = load_history()
 
 # ================= DASHBOARD =================
 col1, col2 = st.columns([2, 1])
 
-# ---------------- LEFT PANEL ----------------
+# ---------------- LEFT ----------------
 with col1:
     st.subheader("🎮 Sensor Control Panel")
 
@@ -102,9 +136,13 @@ with col1:
     st.dataframe(sensor_df, use_container_width=True)
 
     st.subheader("📈 Live NOx Trend")
-    st.line_chart(hist["prediction"])
 
-# ---------------- RIGHT PANEL ----------------
+    if not hist.empty:
+        st.line_chart(hist.set_index("time")["prediction"])
+    else:
+        st.info("No data yet...")
+
+# ---------------- RIGHT ----------------
 with col2:
     st.subheader("🤖 AI Decision Engine")
 
@@ -115,14 +153,19 @@ with col2:
         st.error("🚨 CRITICAL POLLUTION ALERT")
     elif status == "MODERATE":
         st.warning("⚠ MODERATE POLLUTION")
+    else:
+        st.success("✅ Air Quality Safe")
 
     st.subheader("📊 System Stats")
 
-    avg = hist["prediction"].mean()
-    max_val = hist["prediction"].max()
+    if not hist.empty:
+        avg = hist["prediction"].mean()
+        max_val = hist["prediction"].max()
 
-    st.metric("Average NOx", f"{avg:.2f}")
-    st.metric("Peak NOx", f"{max_val:.2f}")
+        st.metric("Average NOx", f"{avg:.2f}")
+        st.metric("Peak NOx", f"{max_val:.2f}")
+    else:
+        st.write("No stats available")
 
 # ---------------- AUTO REFRESH ----------------
 time.sleep(refresh_rate)

@@ -94,4 +94,85 @@ This system ensures **high reliability, explainability, and robustness** in dyna
 ---
 
 ## 🏗️ System Architecture
+# 🔄 v11 Update – Changes Only
+
+## 🧠 Architecture Upgrade
+- Introduced **PredictionService layer**
+- Separated ML + Physics logic from UI
+- Made system **API-ready (FastAPI integration possible)**
+
+---
+
+## ✅ Data Validation
+- Added input validation for sensor data
+- Prevents NaN / infinite values from entering model
+- Improves system reliability
+
+---
+
+## 🤖 Hybrid Prediction Enhancement
+- Centralized prediction pipeline:
+  - ML prediction
+  - Physics prediction
+  - Residual calculation
+- Cleaner and reusable structure
+
+---
+
+## 🧠 Explainability (NEW)
+- Added **feature contribution module**
+- Lightweight SHAP-style approximation:
+  - NO contribution
+  - NO2 contribution
+  - Wind effect
+  - Temperature effect
+- Visualized using bar chart in dashboard
+
+---
+
+## 🚨 Alert System Upgrade
+- Replaced simple alerts with **scoring-based alert system**
+- Introduced:
+  - `alert_score()` → combines residual + anomaly + drift
+  - `alert_label()` → maps score → NORMAL / WARNING / CRITICAL
+- More intelligent and realistic alerting
+
+---
+
+## 📊 Analytics Improvements
+- Integrated alert logic with:
+  - Anomaly detection
+  - Drift detection
+- Better decision-making using combined signals
+
+---
+
+## ⚡ Performance Improvements
+- Reduced redundant computations
+- Optimized prediction flow using service layer
+- Cleaner execution pipeline
+
+---
+
+## 🧩 Code Quality Improvements
+- Modular structure (services, analytics, UI separation)
+- Improved readability and maintainability
+- Easier future extension (API / IoT integration)
+
+---
+
+## 🌐 Deployment Readiness
+- System is now:
+  - Backend-ready
+  - Scalable
+  - Suitable for real-world integration
+
+---
+
+## 🎯 Summary
+v11 transforms the system into a:
+- **Modular AI platform**
+- **Explainable hybrid model**
+- **Reliable real-time monitoring system**
+- **Deployment-ready architecture**
 

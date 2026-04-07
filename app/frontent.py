@@ -5,6 +5,10 @@ import pickle
 import sqlite3
 from datetime import datetime
 import time
+import logging
+
+# ---------------- LOGGING ----------------
+logging.basicConfig(level=logging.INFO)
 
 # ---------------- CONFIG ----------------
 st.set_page_config(page_title="NOx AI Control Center", layout="wide")
@@ -24,8 +28,11 @@ st.markdown('<p class="big-font">⚡ AI NOx Control Center</p>', unsafe_allow_ht
 @st.cache_resource
 def load_model():
     try:
-        return pickle.load(open("nox_rf_model.pkl", "rb"))
-    except:
+        model = pickle.load(open("nox_rf_model.pkl", "rb"))
+        logging.info("Model loaded successfully")
+        return model
+    except Exception as e:
+        logging.error("Model loading failed")
         st.error("❌ Model loading failed")
         st.stop()
 
@@ -36,6 +43,7 @@ model = load_model()
 def init_db():
     conn = sqlite3.connect("nox_data.db", check_same_thread=False)
     c = conn.cursor()
+
     c.execute("""
     CREATE TABLE IF NOT EXISTS readings(
         time TEXT,
@@ -43,6 +51,14 @@ def init_db():
         status TEXT
     )
     """)
+
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS alerts(
+        time TEXT,
+        level TEXT
+    )
+    """)
+
     conn.commit()
     return conn
 
@@ -64,6 +80,13 @@ def generate_sensor_data():
         "month": now.month
     }
 
+# ---------------- VALIDATION ----------------
+def validate_input(data):
+    for key, val in data.items():
+        if val is None or np.isnan(val):
+            return False
+    return True
+
 # ---------------- CLASSIFY ----------------
 def classify(val):
     if val < 40:
@@ -73,23 +96,24 @@ def classify(val):
     else:
         return "UNSAFE", "status-unsafe"
 
-# ---------------- DB FUNCTIONS ----------------
+# ---------------- DB OPS ----------------
 def save_reading(prediction, status):
     cursor = conn.cursor()
-    cursor.execute(
-        "INSERT INTO readings VALUES (?, ?, ?)",
-        (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), prediction, status)
-    )
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    cursor.execute("INSERT INTO readings VALUES (?, ?, ?)", (now, prediction, status))
+
+    if status == "UNSAFE":
+        cursor.execute("INSERT INTO alerts VALUES (?, ?)", (now, status))
+
     conn.commit()
 
 def load_history():
-    df = pd.read_sql("SELECT * FROM readings ORDER BY time DESC LIMIT 200", conn)
+    df = pd.read_sql("SELECT * FROM readings ORDER BY time DESC LIMIT 300", conn)
     return df[::-1]
 
-def clear_db():
-    cursor = conn.cursor()
-    cursor.execute("DELETE FROM readings")
-    conn.commit()
+def load_alerts():
+    return pd.read_sql("SELECT * FROM alerts ORDER BY time DESC LIMIT 50", conn)
 
 # ---------------- SIDEBAR ----------------
 st.sidebar.header("⚙ Control Panel")
@@ -97,18 +121,14 @@ st.sidebar.header("⚙ Control Panel")
 refresh_rate = st.sidebar.slider("Refresh Rate (sec)", 1, 10, 3)
 simulate = st.sidebar.toggle("Simulate Sensor", True)
 
-if st.sidebar.button("🗑 Clear Database"):
-    clear_db()
-    st.sidebar.success("Database Cleared!")
-
 # ---------------- SESSION CONTROL ----------------
 if "last_run" not in st.session_state:
-    st.session_state.last_run = None
+    st.session_state.last_run = 0
 
 current_time = time.time()
 
 run_prediction = False
-if st.session_state.last_run is None or current_time - st.session_state.last_run > refresh_rate:
+if current_time - st.session_state.last_run > refresh_rate:
     run_prediction = True
     st.session_state.last_run = current_time
 
@@ -117,44 +137,38 @@ if run_prediction:
 
     sensor = generate_sensor_data() if simulate else {}
 
-    df_input = pd.DataFrame([sensor])
+    if validate_input(sensor):
+        df_input = pd.DataFrame([sensor])
 
-    try:
-        prediction = float(model.predict(df_input)[0])
-    except:
-        prediction = 0.0
+        try:
+            prediction = float(model.predict(df_input)[0])
+        except:
+            prediction = 0.0
+            logging.warning("Prediction failed")
 
-    status, css = classify(prediction)
+        status, css = classify(prediction)
 
-    save_reading(prediction, status)
+        save_reading(prediction, status)
 
-# Load history
+# Load data
 hist = load_history()
+alerts = load_alerts()
+
+# Add smoothing (rolling mean)
+if not hist.empty:
+    hist["smoothed"] = hist["prediction"].rolling(window=5).mean()
 
 # ================= DASHBOARD =================
 col1, col2 = st.columns([2, 1])
 
 # ---------------- LEFT ----------------
 with col1:
-    st.subheader("🎮 Sensor Control Panel")
-
-    if run_prediction:
-        sensor_df = pd.DataFrame(sensor.items(), columns=["Sensor", "Value"])
-        st.dataframe(sensor_df, use_container_width=True)
-
-    st.subheader("📈 Live NOx Trend")
+    st.subheader("📈 NOx Trend (Raw vs Smoothed)")
 
     if not hist.empty:
-        st.line_chart(hist.set_index("time")["prediction"])
+        st.line_chart(hist.set_index("time")[["prediction", "smoothed"]])
     else:
         st.info("No data available")
-
-    # 🔥 Download button
-    st.download_button(
-        "📥 Download Data (CSV)",
-        hist.to_csv(index=False),
-        file_name="nox_data.csv"
-    )
 
 # ---------------- RIGHT ----------------
 with col2:
@@ -163,21 +177,29 @@ with col2:
     if not hist.empty:
         latest = hist.iloc[-1]
 
-        st.metric("Predicted NOx", f"{latest['prediction']:.2f}")
+        st.metric("NOx", f"{latest['prediction']:.2f}")
         st.markdown(f"<h2 class='{classify(latest['prediction'])[1]}'>{latest['status']}</h2>", unsafe_allow_html=True)
 
         if latest["status"] == "UNSAFE":
             st.error("🚨 CRITICAL ALERT")
         elif latest["status"] == "MODERATE":
-            st.warning("⚠ MODERATE LEVEL")
+            st.warning("⚠ MODERATE")
         else:
-            st.success("✅ SAFE LEVEL")
+            st.success("✅ SAFE")
 
-        st.subheader("📊 System Stats")
+        st.subheader("📊 Insights")
 
-        st.metric("Average NOx", f"{hist['prediction'].mean():.2f}")
-        st.metric("Peak NOx", f"{hist['prediction'].max():.2f}")
-        st.metric("Total Records", len(hist))
+        st.metric("Avg", f"{hist['prediction'].mean():.2f}")
+        st.metric("Peak", f"{hist['prediction'].max():.2f}")
+        st.metric("Alerts", len(alerts))
+
+# ---------------- ALERT PANEL ----------------
+st.subheader("🚨 Alert History")
+
+if not alerts.empty:
+    st.dataframe(alerts, use_container_width=True)
+else:
+    st.info("No alerts triggered")
 
 # ---------------- AUTO REFRESH ----------------
 time.sleep(1)

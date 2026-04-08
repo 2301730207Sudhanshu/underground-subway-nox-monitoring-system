@@ -302,3 +302,50 @@ v12 upgrades the system into a:
 - **Demo-ready product**
 
 This version significantly improves usability, testing capability, and real-world applicability.
+
+## 🚀 Updates (v13 – Pro Max)
+
+### ⚡ Core Enhancements
+- Added **hybrid prediction system** (ML + Physics model)
+- Implemented **residual calculation** for model validation
+- Introduced **adaptive thresholds** based on rolling mean & standard deviation
+
+### 📊 Analytics & Intelligence
+- Added **EMA (Exponential Moving Average)** smoothing
+- Implemented **anomaly detection (Z-score method)**
+- Added **data drift detection** for model stability monitoring
+
+### 🧠 System Modes
+- Added **Manual Mode** for user-controlled sensor input
+- Default **Auto Mode** for simulated real-time sensor data
+
+### 💾 Data Management
+- Upgraded database schema to store:
+  - ML prediction
+  - Physics prediction
+  - Residual
+  - Status
+  - Alert
+- Improved **safe insert handling** (prevents crashes)
+
+### 🎨 UI/UX Improvements
+- Added **dynamic status banner (SAFE / MOD / UNSAFE)**
+- Displayed **last updated timestamp**
+- Improved dashboard layout and readability
+
+### ⚙️ Configuration & Reliability
+- Added **config class for thresholds & constants**
+- Integrated **logging system (app.log)**
+- Handled **empty dataset edge cases**
+
+### 🔁 System Behavior
+- Implemented **auto-refresh loop**
+- Ensured **stable execution flow for real-time monitoring**
+
+---
+
+## 🏆 Result
+A **real-time, adaptive NOx monitoring system** with:
+- Hybrid AI predictions
+- Intelligent analytics
+- Production-ready dashboard

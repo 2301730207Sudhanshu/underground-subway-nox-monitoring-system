@@ -10,17 +10,16 @@ import os
 
 # ================= CONFIG =================
 class Config:
-    SAFE = float(os.getenv("SAFE_THRESHOLD", 40))
-    MODERATE = float(os.getenv("MODERATE_THRESHOLD", 80))
-    ANOMALY_Z = 2.0
+    DEFAULT_SAFE = float(os.getenv("SAFE_THRESHOLD", 40))
+    DEFAULT_MOD = float(os.getenv("MODERATE_THRESHOLD", 80))
+    ANOMALY_Z = 2.5
     DRIFT_THRESHOLD = 20
-    ALERT_COOLDOWN = 10
 
 # ================= LOGGING =================
 logging.basicConfig(filename="app.log", level=logging.INFO)
 
 # ================= UI =================
-st.set_page_config(page_title="NOx AI Control Center v12", layout="wide")
+st.set_page_config(page_title="NOx AI Control Center v13", layout="wide")
 
 st.markdown("""
 <style>
@@ -28,10 +27,11 @@ st.markdown("""
 .safe {color:#00ff9c;}
 .mod {color:orange;}
 .unsafe {color:red;}
+.banner {padding:10px; border-radius:10px; text-align:center; font-weight:bold;}
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown('<p class="big">⚡ NOx AI Control Center v12 (Final System)</p>', unsafe_allow_html=True)
+st.markdown('<p class="big">⚡ NOx AI Control Center v13 (Pro Max)</p>', unsafe_allow_html=True)
 
 # ================= MODEL =================
 @st.cache_resource
@@ -69,12 +69,10 @@ def load():
     df = pd.read_sql("SELECT * FROM readings ORDER BY time DESC LIMIT 300", conn)
     return df[::-1]
 
-# ================= SIDEBAR CONTROLS =================
-st.sidebar.subheader("⚙ System Controls")
+# ================= SIDEBAR =================
+st.sidebar.subheader("⚙ Controls")
 
-manual_mode = st.sidebar.toggle("Manual Input Mode", False)
-export_btn = st.sidebar.button("📥 Export CSV")
-clear_db = st.sidebar.button("🗑 Clear Database")
+manual_mode = st.sidebar.toggle("Manual Mode", False)
 refresh = st.sidebar.slider("Refresh",1,10,2)
 
 # ================= SENSOR =================
@@ -95,12 +93,12 @@ def sensor():
 
 def manual_sensor():
     return {
-        "no": st.sidebar.slider("NO", 0.0, 300.0, 50.0),
-        "no2": st.sidebar.slider("NO2", 0.0, 300.0, 40.0),
-        "relativehumidity": st.sidebar.slider("Humidity", 0.0, 100.0, 50.0),
-        "temperature": st.sidebar.slider("Temperature", 0.0, 60.0, 30.0),
-        "wind_direction": st.sidebar.slider("Wind Dir", 0.0, 360.0, 180.0),
-        "wind_speed": st.sidebar.slider("Wind Speed", 0.0, 20.0, 5.0),
+        "no": st.sidebar.slider("NO",0.0,300.0,50.0),
+        "no2": st.sidebar.slider("NO2",0.0,300.0,40.0),
+        "relativehumidity": st.sidebar.slider("Humidity",0.0,100.0,50.0),
+        "temperature": st.sidebar.slider("Temp",0.0,60.0,30.0),
+        "wind_direction": st.sidebar.slider("Wind Dir",0.0,360.0,180.0),
+        "wind_speed": st.sidebar.slider("Wind Speed",0.0,20.0,5.0),
         "hour": datetime.now().hour,
         "day": datetime.now().day,
         "weekday": datetime.now().weekday(),
@@ -109,128 +107,74 @@ def manual_sensor():
 
 s = manual_sensor() if manual_mode else sensor()
 
-# ================= PHYSICS =================
+# ================= MODELS =================
 def physics(s):
     return 0.5*s["no"] + 0.3*s["no2"] - 0.2*s["wind_speed"] + 0.1*s["temperature"]
 
-# ================= PREDICTION SERVICE =================
-class PredictionService:
+def predict(s):
+    df = pd.DataFrame([s])
+    ml = float(model.predict(df)[0])
+    phy = physics(s)
+    res = abs(ml - phy)
+    return ml, phy, res
 
-    @staticmethod
-    def validate(sensor):
-        for v in sensor.values():
-            if isinstance(v, (int,float)):
-                if np.isnan(v) or np.isinf(v):
-                    return False
-        return True
+# ================= ANALYTICS =================
+def adaptive_thresholds(series):
+    if len(series) < 20:
+        return Config.DEFAULT_SAFE, Config.DEFAULT_MOD
+    mean = series.mean()
+    std = series.std()
+    return mean - std, mean + std
 
-    @staticmethod
-    def predict(sensor):
-        if not PredictionService.validate(sensor):
-            return None
-        df = pd.DataFrame([sensor])
-        ml = float(model.predict(df)[0])
-        phy = physics(sensor)
-        res = abs(ml - phy)
-        return ml, phy, res
-
-# ================= CLASSIFICATION =================
-def classify(v):
-    if v < Config.SAFE:
+def classify(v, safe, mod):
+    if v < safe:
         return "SAFE","safe"
-    elif v < Config.MODERATE:
+    elif v < mod:
         return "MOD","mod"
     return "UNSAFE","unsafe"
 
-# ================= ANALYTICS =================
+def anomaly(series):
+    if len(series) < 10: return False
+    z = (series.iloc[-1] - series.mean()) / (series.std() or 1)
+    return abs(z) > Config.ANOMALY_Z
+
+def drift(series):
+    if len(series) < 20: return False
+    return abs(series.iloc[-1] - series.mean()) > Config.DRIFT_THRESHOLD
+
 def ema(series):
     return series.ewm(alpha=0.3).mean()
 
-def anomaly(series):
-    if len(series)<10: return False
-    z=(series.iloc[-1]-series.mean())/(series.std() or 1)
-    return abs(z)>Config.ANOMALY_Z
-
-def drift(series):
-    if len(series)<20: return False
-    return abs(series.iloc[-1]-series.mean())>Config.DRIFT_THRESHOLD
-
-def confidence(ml, phy):
-    return max(0, 100 - abs(ml-phy))
-
-def health(anom, drift_flag, conf):
-    score = conf
-    if anom: score -= 30
-    if drift_flag: score -= 20
-    return max(0, min(100, score))
-
-# ================= ALERT =================
-def alert_score(residual, anomaly_flag, drift_flag):
-    score = residual
-    if anomaly_flag: score += 30
-    if drift_flag: score += 20
-    return score
-
-def alert_label(score):
-    if score > 80: return "CRITICAL"
-    elif score > 40: return "WARNING"
-    return "NORMAL"
-
-# ================= EXPLAINABILITY =================
-def feature_importance(sensor):
-    return {
-        "NO": sensor["no"] * 0.5,
-        "NO2": sensor["no2"] * 0.3,
-        "Wind": -sensor["wind_speed"] * 0.2,
-        "Temp": sensor["temperature"] * 0.1
-    }
-
 # ================= MAIN =================
-result = PredictionService.predict(s)
-
-if result:
-    ml, phy, res = result
-else:
-    st.error("Invalid sensor data")
-    st.stop()
-
-status, css = classify(ml)
+ml, phy, res = predict(s)
 
 hist = load()
+
+safe_t, mod_t = adaptive_thresholds(hist["ml"]) if not hist.empty else (Config.DEFAULT_SAFE, Config.DEFAULT_MOD)
+
+status, css = classify(ml, safe_t, mod_t)
 
 anom = anomaly(hist["ml"]) if not hist.empty else False
 drift_flag = drift(hist["ml"]) if not hist.empty else False
 
-score = alert_score(res, anom, drift_flag)
-alert = alert_label(score)
-
-save((datetime.now().strftime("%Y-%m-%d %H:%M:%S"), ml, phy, res, status, alert))
+save((datetime.now().strftime("%Y-%m-%d %H:%M:%S"), ml, phy, res, status, "OK"))
 
 hist = load()
 
 if not hist.empty:
     hist["ema"] = ema(hist["ml"])
-    conf = confidence(hist.iloc[-1]["ml"], hist.iloc[-1]["physics"])
-    health_score = health(anom, drift_flag, conf)
-else:
-    conf = health_score = 0
 
-# ================= EXPORT =================
-if export_btn:
-    df = load()
-    df.to_csv("nox_export.csv", index=False)
-    st.success("Data exported")
+# ================= STATUS BANNER =================
+color = "#00ff9c" if status=="SAFE" else "orange" if status=="MOD" else "red"
+st.markdown(f"<div class='banner' style='background:{color}'>SYSTEM STATUS: {status}</div>", unsafe_allow_html=True)
 
-if clear_db:
-    conn.execute("DELETE FROM readings")
-    conn.commit()
-    st.warning("Database cleared")
+st.caption(f"Last updated: {datetime.now().strftime('%H:%M:%S')}")
 
 # ================= DASHBOARD =================
 col1,col2 = st.columns([2,1])
 
 with col1:
-    st.subheader("📈 Real-time Monitoring")
+    st.subheader("📈 NOx Trends")
     if not hist.empty:
         st.line_chart(hist.set_index("time")[["ml","physics","ema"]])
 
@@ -238,42 +182,19 @@ with col1:
     if not hist.empty:
         st.line_chart(hist.set_index("time")["residual"])
 
-    st.subheader("🧠 Feature Contribution")
-    st.bar_chart(pd.Series(feature_importance(s)))
-
-    if not hist.empty:
-        csv = hist.to_csv(index=False).encode('utf-8')
-        st.download_button("⬇ Download Data", csv, "nox_data.csv", "text/csv")
-
 with col2:
     st.subheader("🤖 AI Engine")
 
-    if not hist.empty:
-        latest = hist.iloc[-1]
+    st.metric("ML", f"{ml:.2f}")
+    st.metric("Physics", f"{phy:.2f}")
+    st.metric("Residual", f"{res:.2f}")
 
-        st.metric("ML", f"{latest['ml']:.2f}")
-        st.metric("Physics", f"{latest['physics']:.2f}")
-        st.metric("Residual", f"{latest['residual']:.2f}")
-        st.metric("Confidence", f"{conf:.1f}%")
-        st.metric("Health", f"{health_score:.1f}/100")
+    st.markdown(f"<h2 class='{css}'>{status}</h2>", unsafe_allow_html=True)
 
-        st.markdown(f"<h2 class='{css}'>{latest['status']}</h2>", unsafe_allow_html=True)
-
-        if latest["alert"] == "CRITICAL":
-            st.error("🚨 CRITICAL ALERT")
-        elif latest["alert"] == "WARNING":
-            st.warning("⚠ WARNING")
-
-        if anom:
-            st.error("🚨 Anomaly")
-        if drift_flag:
-            st.warning("⚠ Drift")
-
-    st.subheader("📊 KPI")
-    if not hist.empty:
-        st.metric("Avg", f"{hist['ml'].mean():.2f}")
-        st.metric("Max", f"{hist['ml'].max():.2f}")
-        st.metric("Min", f"{hist['ml'].min():.2f}")
+    if anom:
+        st.error("🚨 Anomaly")
+    if drift_flag:
+        st.warning("⚠ Drift")
 
 # ================= AUTO REFRESH =================
 time.sleep(refresh)

@@ -1,1 +1,2 @@
 print("predict")
+print("")

@@ -8,3 +8,4 @@ DL
 NN
 ANN
 GAN
+Finetuning

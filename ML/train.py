@@ -1,1 +1,4 @@
 print("train")
+print(
+  "jk"
+)

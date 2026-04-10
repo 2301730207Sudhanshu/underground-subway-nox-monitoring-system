@@ -1,4 +1,3 @@
-# model.py
 
 import joblib
 from sklearn.ensemble import RandomForestClassifier

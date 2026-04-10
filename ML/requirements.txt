@@ -3,9 +3,3 @@ Pandas
 Scikit-learn
 Tensorflow
 Python
-CNN
-DL
-NN
-ANN
-GAN
-Finetuning
